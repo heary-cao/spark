@@ -38,6 +38,8 @@ class SortShuffleSuite extends ShuffleSuite with BeforeAndAfterAll {
 
   override def beforeAll() {
     super.beforeAll()
+    // Clear the local cache directory
+    Utils.clearLocalRootDirs()
     conf.set("spark.shuffle.manager", "sort")
   }
 
@@ -50,6 +52,8 @@ class SortShuffleSuite extends ShuffleSuite with BeforeAndAfterAll {
   override def afterEach(): Unit = {
     try {
       Utils.deleteRecursively(tempDir)
+      // Clear the local cache directory
+      Utils.clearLocalRootDirs()
     } finally {
       super.afterEach()
     }

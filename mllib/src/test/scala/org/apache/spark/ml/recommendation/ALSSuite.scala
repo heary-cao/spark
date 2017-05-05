@@ -774,6 +774,8 @@ class ALSCleanerSuite extends SparkFunSuite {
     } finally {
       Utils.deleteRecursively(localDir)
       Utils.deleteRecursively(checkpointDir)
+      // Clear the local cache directory
+      Utils.clearLocalRootDirs()
     }
   }
 
@@ -817,6 +819,8 @@ class ALSCleanerSuite extends SparkFunSuite {
     } finally {
       Utils.deleteRecursively(localDir)
       Utils.deleteRecursively(checkpointDir)
+      // Clear the local cache directory
+      Utils.clearLocalRootDirs()
     }
   }
 }
