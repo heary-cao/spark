@@ -30,6 +30,8 @@ import com.github.fommil.netlib.BLAS.{getInstance => blas}
 import org.apache.commons.io.FileUtils
 import org.apache.commons.io.filefilter.TrueFileFilter
 
+import org.scalatest.BeforeAndAfterEach
+
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.ml.linalg.Vectors
@@ -744,84 +746,81 @@ class ALSSuite
   }
 }
 
-class ALSCleanerSuite extends SparkFunSuite {
-  test("ALS shuffle cleanup standalone") {
-    val conf = new SparkConf()
-    val localDir = Utils.createTempDir()
-    val checkpointDir = Utils.createTempDir()
-    def getAllFiles: Set[File] =
-      FileUtils.listFiles(localDir, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE).asScala.toSet
+class ALSCleanerSuite extends SparkFunSuite with BeforeAndAfterEach {
+
+  @transient var sc: SparkContext = _
+  private var localDir: File = _
+  private var checkpointDir: File = _
+  val conf = new SparkConf()
+
+  override def beforeEach(): Unit = {
+    super.beforeEach()
+    localDir = Utils.createTempDir()
+    checkpointDir = Utils.createTempDir()
+    conf.set("spark.local.dir", localDir.getAbsolutePath)
+  }
+
+  override def afterEach(): Unit = {
     try {
-      conf.set("spark.local.dir", localDir.getAbsolutePath)
-      val sc = new SparkContext("local[2]", "test", conf)
-      try {
-        sc.setCheckpointDir(checkpointDir.getAbsolutePath)
-        // Test checkpoint and clean parents
-        val input = sc.parallelize(1 to 1000)
-        val keyed = input.map(x => (x % 20, 1))
-        val shuffled = keyed.reduceByKey(_ + _)
-        val keysOnly = shuffled.keys
-        val deps = keysOnly.dependencies
-        keysOnly.count()
-        ALS.cleanShuffleDependencies(sc, deps, true)
-        val resultingFiles = getAllFiles
-        assert(resultingFiles === Set())
-        // Ensure running count again works fine even if we kill the shuffle files.
-        keysOnly.count()
-      } finally {
-        sc.stop()
-      }
-    } finally {
+      sc.stop()
+      sc = null
       Utils.deleteRecursively(localDir)
       Utils.deleteRecursively(checkpointDir)
       // Clear the local cache directory
       Utils.clearLocalRootDirs()
+    } finally {
+      super.afterEach()
     }
   }
 
-  test("ALS shuffle cleanup in algorithm") {
-    val conf = new SparkConf()
-    val localDir = Utils.createTempDir()
-    val checkpointDir = Utils.createTempDir()
+  test("ALS shuffle cleanup standalone") {
     def getAllFiles: Set[File] =
       FileUtils.listFiles(localDir, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE).asScala.toSet
-    try {
-      conf.set("spark.local.dir", localDir.getAbsolutePath)
-      val sc = new SparkContext("local[2]", "test", conf)
-      try {
-        sc.setCheckpointDir(checkpointDir.getAbsolutePath)
-        // Generate test data
-        val (training, _) = ALSSuite.genImplicitTestData(sc, 20, 5, 1, 0.2, 0)
-        // Implicitly test the cleaning of parents during ALS training
-        val spark = SparkSession.builder
-          .master("local[2]")
-          .appName("ALSCleanerSuite")
-          .sparkContext(sc)
-          .getOrCreate()
-        import spark.implicits._
-        val als = new ALS()
-          .setRank(1)
-          .setRegParam(1e-5)
-          .setSeed(0)
-          .setCheckpointInterval(1)
-          .setMaxIter(7)
-        val model = als.fit(training.toDF())
-        val resultingFiles = getAllFiles
-        // We expect the last shuffles files, block ratings, user factors, and item factors to be
-        // around but no more.
-        val pattern = "shuffle_(\\d+)_.+\\.data".r
-        val rddIds = resultingFiles.flatMap { f =>
-          pattern.findAllIn(f.getName()).matchData.map { _.group(1) } }
-        assert(rddIds.size === 4)
-      } finally {
-        sc.stop()
-      }
-    } finally {
-      Utils.deleteRecursively(localDir)
-      Utils.deleteRecursively(checkpointDir)
-      // Clear the local cache directory
-      Utils.clearLocalRootDirs()
-    }
+    conf.set("spark.local.dir", localDir.getAbsolutePath)
+    sc = new SparkContext("local[2]", "test", conf)
+    sc.setCheckpointDir(checkpointDir.getAbsolutePath)
+    // Test checkpoint and clean parents
+    val input = sc.parallelize(1 to 1000)
+    val keyed = input.map(x => (x % 20, 1))
+    val shuffled = keyed.reduceByKey(_ + _)
+    val keysOnly = shuffled.keys
+    val deps = keysOnly.dependencies
+    keysOnly.count()
+    ALS.cleanShuffleDependencies(sc, deps, true)
+    val resultingFiles = getAllFiles
+    assert(resultingFiles === Set())
+    // Ensure running count again works fine even if we kill the shuffle files.
+    keysOnly.count()
+  }
+
+  test("ALS shuffle cleanup in algorithm") {
+    def getAllFiles: Set[File] =
+      FileUtils.listFiles(localDir, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE).asScala.toSet
+    sc = new SparkContext("local[2]", "test", conf)
+    sc.setCheckpointDir(checkpointDir.getAbsolutePath)
+    // Generate test data
+    val (training, _) = ALSSuite.genImplicitTestData(sc, 20, 5, 1, 0.2, 0)
+    // Implicitly test the cleaning of parents during ALS training
+    val spark = SparkSession.builder
+      .master("local[2]")
+      .appName("ALSCleanerSuite")
+      .sparkContext(sc)
+      .getOrCreate()
+    import spark.implicits._
+    val als = new ALS()
+      .setRank(1)
+      .setRegParam(1e-5)
+      .setSeed(0)
+      .setCheckpointInterval(1)
+      .setMaxIter(7)
+    val model = als.fit(training.toDF())
+    val resultingFiles = getAllFiles
+    // We expect the last shuffles files, block ratings, user factors, and item factors to be
+    // around but no more.
+    val pattern = "shuffle_(\\d+)_.+\\.data".r
+    val rddIds = resultingFiles.flatMap { f =>
+      pattern.findAllIn(f.getName()).matchData.map { _.group(1) } }
+    assert(rddIds.size === 4)
   }
 }
 
